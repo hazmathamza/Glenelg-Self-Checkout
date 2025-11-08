@@ -1,0 +1,1 @@
+# Glenelg-Self-Checkout
