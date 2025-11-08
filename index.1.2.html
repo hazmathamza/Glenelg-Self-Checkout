@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Library Scanner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-firestore-compat.js"></script>
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #f4f6f8;
+      margin: 0;
+      padding: 20px;
+      color: #333;
+    }
+    h2, h3 {
+      color: #2c3e50;
+    }
+    .card {
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    label, input, select, button {
+      font-size: 16px;
+      margin: 5px 0;
+    }
+    input, select {
+      padding: 8px;
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+    button {
+      background: #3498db;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    button:hover {
+      background: #2980b9;
+    }
+    #video {
+      border-radius: 10px;
+      margin-top: 10px;
+    }
+    #output {
+      font-weight: bold;
+      margin-top: 10px;
+    }
+    #checkoutList li {
+      margin: 5px 0;
+      padding: 8px;
+      background: #ecf0f1;
+      border-radius: 5px;
+    }
+    .overdue {
+      background: #ffe6e6;
+      color: #c0392b;
+      font-weight: bold;
+    }
+    #newBookForm, #checkinOptions {
+      display: none;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Library Scanner</h2>
+    <label><input type="radio" name="mode" value="checkout" checked> Check Out</label>
+    <label><input type="radio" name="mode" value="checkin"> Check In</label><br><br>
+
+    <select id="bookDropdown">
+      <option value="">Select a book</option>
+    </select>
+    <button onclick="loadBooks()">🔄 Refresh</button>
+    <button onclick="toggleNewBookForm()">➕ Add Book</button><br><br>
+
+    <div id="newBookForm" class="card">
+      <h3>Add New Book</h3>
+      <input type="text" id="newTitle" placeholder="Title">
+      <input type="text" id="newAuthor" placeholder="Author">
+      <input type="text" id="newGenre" placeholder="Genre">
+      <input type="number" id="newCopies" placeholder="Total Copies" min="1">
+      <button onclick="addNewBook()">📚 Save</button>
+    </div>
+
+    <video id="video" width="400" height="300" autoplay></video>
+    <p id="output">Waiting for scan...</p>
+
+    <div id="checkinOptions" class="card">
+      <h3>Select Books to Check In</h3>
+      <form id="checkinForm"></form>
+      <button onclick="confirmCheckin()">✅ Confirm Check-In</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>📋 Active Checkouts</h3>
+    <ul id="checkoutList"></ul>
+  </div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyD6h9XTa6g34s7DdmyJOeDUrAU-CcxNGdo",
+      authDomain: "library-system-61e86.firebaseapp.com",
+      projectId: "library-system-61e86",
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    let currentStudentId = null;
+
+    function toggleNewBookForm() {
+      const form = document.getElementById("newBookForm");
+      form.style.display = form.style.display === "none" ? "block" : "none";
+    }
+
+    async function loadBooks() {
+      const dropdown = document.getElementById("bookDropdown");
+      dropdown.innerHTML = '<option value="">Select a book</option>';
+      const books = await db.collection("books").get();
+      books.forEach(doc => {
+        const book = doc.data();
+        const option = document.createElement("option");
+        option.value = doc.id;
+        option.text = `${book.title} (${book.author}) - ${book.available_copies}/${book.total_copies}`;
+        dropdown.appendChild(option);
+      });
+    }
+
+    async function addNewBook() {
+      const title = document.getElementById("newTitle").value.trim();
+      const author = document.getElementById("newAuthor").value.trim();
+      const genre = document.getElementById("newGenre").value.trim();
+      const total_copies = parseInt(document.getElementById("newCopies").value);
+      if (!title || !author || !genre || isNaN(total_copies) || total_copies < 1) {
+        alert("Please fill in all fields.");
+        return;
+      }
+      await db.collection("books").add({
+        title, author, genre,
+        total_copies,
+        available_copies: total_copies
+      });
+      alert(`Book "${title}" added.`);
+      toggleNewBookForm();
+      loadBooks();
+    }
+
+    async function loadActiveCheckouts() {
+      const list = document.getElementById("checkoutList");
+      list.innerHTML = "";
+      const now = new Date();
+      const checkouts = await db.collection("checkouts").where("return_date", "==", null).get();
+
+      for (const doc of checkouts.docs) {
+        const data = doc.data();
+        const bookDoc = await db.collection("books").doc(data.book_id).get();
+        const studentDoc = await db.collection("students").doc(data.student_id).get();
+        const bookTitle = bookDoc.exists ? bookDoc.data().title : "Unknown Book";
+        const studentName = studentDoc.exists ? studentDoc.data().name : "Unknown Student";
+        const dueDate = data.due_date?.toDate();
+        const isOverdue = dueDate && dueDate < now;
+
+        const item = document.createElement("li");
+        item.className = isOverdue ? "overdue" : "";
+        item.innerText = `${bookTitle} → ${studentName} | Due: ${dueDate?.toLocaleDateString() || "N/A"} ${isOverdue ? "⚠️ Overdue" : ""}`;
+        list.appendChild(item);
+      }
+    }
+
+    async function confirmCheckin() {
+      const selected = Array.from(document.querySelectorAll("#checkinForm input:checked"));
+      for (const checkbox of selected) {
+        const checkoutId = checkbox.value;
+        const bookId = checkbox.dataset.bookId;
+
+        await db.collection("checkouts").doc(checkoutId).update({
+          return_date: new Date()
+        });
+
+        await db.collection("books").doc(bookId).update({
+          available_copies: firebase.firestore.FieldValue.increment(1)
+        });
+      }
+
+      document.getElementById("checkinOptions").style.display = "none";
+      document.getElementById("output").innerText += `\n✅ Checked in ${selected.length} book(s).`;
+      loadBooks();
+      loadActiveCheckouts();
+    }
+
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => {
+        const video = document.getElementById('video');
+        video.srcObject = stream;
+        video.play();
+
+        const codeReader = new ZXing.BrowserBarcodeReader();
+        codeReader.decodeFromVideoDevice(null, 'video', async (result, err) => {
+          if (result) {
+            const barcodeValue = result.text;
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            const bookId = document.getElementById('bookDropdown').value;
+            const output = document.getElementById('output');
+            output.innerText = `Scanned: ${barcodeValue}`;
+            currentStudentId = barcodeValue;
+
+            const studentRef = db.collection("students").doc(barcodeValue);
+            const studentDoc = await studentRef.get();
+            if (!studentDoc.exists) {
+              output.innerText += `\n❗ Student not found.`;
+              return;
+            }
+
+            const student = studentDoc.data();
+            output.innerText += `\n👤 ${student.name}`;
+
+            if (mode === "checkout") {
+              if (!bookId) {
+                output.innerText += `\n❗ Select a book to check out.`;
+                return;
+              }
+
+              const bookRef = db.collection("books").doc(bookId);
+              const bookDoc = await bookRef.get();
+              if (!bookDoc.exists) {
+                output.innerText += `\n❗ Book not found.`;
+                return;
+              }
+
+              const book = bookDoc.data();
+              if (book.available_copies <= 0) {
+                output.innerText += `\n❗ No copies available.`;
+                return;
+              }
+
+              const checkoutDate = new Date();
+              const dueDate = new Date();
+              dueDate.setDate(checkoutDate.getDate() + 14);
+
+              await db.collection("checkouts").add({
+                student_id: barcodeValue,
+                book_id: bookId,
+                checkout_date: checkoutDate,
+                due_date: dueDate,
+                return_date: null
+              });
+
+              await bookRef.update({
+                available_copies: book.available_copies - 1
+              });
+
+              output.innerText += `\n📚 Book checked out. Due: ${dueDate.toLocaleDateString()}`;
+              loadBooks();
+              loadActiveCheckouts();
+            } else {
+              // Check-in mode: show all active checkouts for this student
+              const checkouts = await db.collection("checkouts")
+                .where("student_id", "==", barcodeValue)
+                .where("return_date", "==", null)
+                .get();
+
+              const form = document.getElementById("checkinForm");
+              form.innerHTML = "";
+
+              if (checkouts.empty) {
+                output.innerText += `\n✅ No books to check in.`;
+                document.getElementById("checkinOptions").style.display = "none";
+                return;
+              }
+
+              for (const doc of checkouts.docs) {
+                const data = doc.data();
+                const bookDoc = await db.collection("books").doc(data.book_id).get();
+                const bookTitle = bookDoc.exists ? bookDoc.data().title : "Unknown Book";
+
+                const label = document.createElement("label");
+                label.style.display = "block";
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.value = doc.id;
+                checkbox.dataset.bookId = data.book_id;
+                label.appendChild(checkbox);
+                label.appendChild(document.createTextNode(` ${bookTitle}`));
+                form.appendChild(label);
+              }
+
+              document.getElementById("checkinOptions").style.display = "block";
+              output.innerText += `\n📖 Select books to check in below.`;
+            }
+          }
+        });
+      })
+      .catch(err => {
+        console.error("Camera access error:", err);
+        document.getElementById('output').innerText = "Camera access denied.";
+      });
+
+    window.onload = () => {
+      loadBooks();
+      loadActiveCheckouts();
+    };
+  </script>
+</body>
+</html>

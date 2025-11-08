@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Library Barcode Scanner</title>
+  <!-- Firebase compat SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-firestore-compat.js"></script>
+  <!-- ZXing barcode scanner -->
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
+</head>
+<body>
+  <h2>Scan Student Barcode</h2>
+  <video id="video" width="400" height="300" style="border:1px solid black;"></video>
+  <p id="output">Waiting for scan...</p>
+
+  <script>
+    // ✅ Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyD6h9XTa6g34s7DdmyJOeDUrAU-CcxNGdo",
+      authDomain: "library-system-61e86.firebaseapp.com",
+      projectId: "library-system-61e86",
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    // ✅ Force camera access
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => {
+        const video = document.getElementById('video');
+        video.srcObject = stream;
+        video.play();
+
+        // ✅ Start barcode scanner
+        const codeReader = new ZXing.BrowserBarcodeReader();
+        codeReader.decodeFromVideoDevice(null, 'video', async (result, err) => {
+          if (result) {
+            const barcodeValue = result.text;
+            document.getElementById('output').innerText = `Scanned: ${barcodeValue}`;
+
+            // 🔍 Look up student
+            const studentRef = db.collection("students").doc(barcodeValue);
+            const studentDoc = await studentRef.get();
+            if (studentDoc.exists) {
+              const student = studentDoc.data();
+              document.getElementById('output').innerText += `\nName: ${student.name}`;
+
+              // 📚 Look up active checkouts
+              const checkouts = await db.collection("checkouts")
+                .where("student_id", "==", barcodeValue)
+                .where("return_date", "==", null)
+                .get();
+
+              checkouts.forEach(async doc => {
+                const bookId = doc.data().book_id;
+                const bookDoc = await db.collection("books").doc(bookId).get();
+                if (bookDoc.exists) {
+                  document.getElementById('output').innerText += `\nChecked out: ${bookDoc.data().title}`;
+                }
+              });
+            } else {
+              document.getElementById('output').innerText += `\nStudent not found.`;
+            }
+          }
+        });
+      })
+      .catch(err => {
+        console.error("Camera access error:", err);
+        document.getElementById('output').innerText = "Camera access denied.";
+      });
+  </script>
+</body>
+</html>
